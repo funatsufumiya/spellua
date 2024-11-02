@@ -1,7 +1,8 @@
 import
   std/macros,
   pkg/[seiryu],
-  spellua/binding
+  spellua/binding,
+  std/typetraits
 
 type
   LuaDriver* = ref object
@@ -110,33 +111,61 @@ macro setBindInteger*(driver: LuaDriver, name: untyped) =
     block:
       `driver`.state.pushinteger(cast[cint](`name`))
       `driver`.state.setglobal(`nameStrLit`)
+
+macro callRetImpl*(driver: LuaDriver, rettype: typedesc): untyped =
+  result = newStmtList()
+  if rettype.strVal == "bool":
+    result.add quote do:
+      let ret = `driver`.state.toboolean(-1) == 1
+      `driver`.state.pop(1)
+      ret
+  elif rettype.strVal == "int":
+    result.add quote do:
+      let ret = `driver`.state.tointeger(-1)
+      `driver`.state.pop(1)
+      ret
+  elif rettype.strVal == "float":
+    result.add quote do:
+      let ret = `driver`.state.tonumber(-1)
+      `driver`.state.pop(1)
+      ret
+  elif rettype.strVal == "string":
+    result.add quote do:
+      let ret = `driver`.state.tostring(-1)
+      `driver`.state.pop(1)
+      ret
+  else:
+    raise newException(AssertionError, "unsupported type: " & $rettype)
   
 # call with no return value
-macro call*(driver: LuaDriver, funcname: cstring, args: varargs[typed]) =
+macro call*(driver: LuaDriver, rettype: untyped, funcname: cstring, args: varargs[typed]): untyped =
   let nargs = args.len
-  if nargs == 0:
-    return quote:
-      `driver`.state.getglobal(`funcname`)
-      `driver`.state.call(0, 0)
-  else:
-    result = newStmtList()
-    result.add quote do:
-      `driver`.state.getglobal(`funcname`)
-    for arg in args:
-      let t = arg.gettype.typeKind
-      if t == ntyBool:
-        result.add quote do:
-          `driver`.state.pushboolean(cast[cint](`arg`))
-      elif t == ntyInt:
-        result.add quote do:
-          `driver`.state.pushinteger(cast[cint](`arg`))
-      elif t == ntyFloat:
-        result.add quote do:
-          `driver`.state.pushnumber(cast[float](`arg`))
-      elif t == ntyString:
-        result.add quote do:
-          `driver`.state.pushstring((`arg`).cstring)
-      else:
-        raise newException(AssertionError, "unsupported type")
+  result = newStmtList()
+  result.add quote do:
+    `driver`.state.getglobal(`funcname`)
+  for arg in args:
+    let t = arg.gettype.typeKind
+    if t == ntyBool:
+      result.add quote do:
+        `driver`.state.pushboolean(cast[cint](`arg`))
+    elif t == ntyInt:
+      result.add quote do:
+        `driver`.state.pushinteger(cast[cint](`arg`))
+    elif t == ntyFloat:
+      result.add quote do:
+        `driver`.state.pushnumber(cast[float](`arg`))
+    elif t == ntyString:
+      result.add quote do:
+        `driver`.state.pushstring((`arg`).cstring)
+    else:
+      raise newException(AssertionError, "unsupported type" & $t)
+  if rettype.strVal == "void":
     result.add quote do:
       `driver`.state.call(cast[cint](`nargs`), 0)
+  elif rettype.strVal in @["bool", "int", "float", "string"]:
+    result.add quote do:
+      `driver`.state.call(cast[cint](`nargs`), 1)
+    result.add quote do:
+      callRetImpl(`driver`, `rettype`)
+  else:
+    raise newException(AssertionError, "unsupported type" & $rettype)
